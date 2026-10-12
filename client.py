@@ -19,9 +19,36 @@ SHAPES = [
     [[0, 0, 1], [1, 1, 1]]  # L
 ]
 
+
+# Sorteia as peças em ciclos de 7. Com a mesma seed, os dois clientes
+# recebem a mesma sequência do começo ao fim da partida.
+class PieceBag:
+    def __init__(self, seed):
+        self.rng = random.Random(seed)
+        self.queue = []
+
+    def _refill(self):
+        bag = list(range(len(SHAPES)))
+        self.rng.shuffle(bag)
+        self.queue.extend(bag)
+
+    def next(self):
+        if len(self.queue) < 2:
+            self._refill()
+        return self.queue.pop(0)
+
+    def peek(self):
+        if len(self.queue) < 2:
+            self._refill()
+        return self.queue[0]
+
+
 class TetrisGame:
-    def __init__(self):
+    def __init__(self, seed):
         self.board = [[0 for _ in range(BOARD_WIDTH)] for _ in range(BOARD_HEIGHT)]
+        self.bag = PieceBag(seed)
+        # Random separado pro lixo, senão as peças saem de sincronia
+        self.garbage_rng = random.Random()
         self.current_piece = None
         self.current_x = 0
         self.current_y = 0
@@ -31,7 +58,7 @@ class TetrisGame:
         self.spawn_piece()
 
     def spawn_piece(self):
-        self.current_shape_idx = random.randint(0, len(SHAPES) - 1)
+        self.current_shape_idx = self.bag.next()
         self.current_piece = [row[:] for row in SHAPES[self.current_shape_idx]]
         self.current_x = BOARD_WIDTH // 2 - len(self.current_piece[0]) // 2
         self.current_y = 0
@@ -88,9 +115,9 @@ class TetrisGame:
                     board_x = self.current_x + c_idx
                     if 0 <= board_y < BOARD_HEIGHT and 0 <= board_x < BOARD_WIDTH:
                         self.board[board_y][board_x] = self.current_shape_idx + 1
-        
+
         lines_cleared = self.clear_lines()
-        
+
         garbage_sent = 0
         if lines_cleared == 2:
             garbage_sent = 1
@@ -107,20 +134,23 @@ class TetrisGame:
         for r in full_lines:
             del self.board[r]
             self.board.insert(0, [0 for _ in range(BOARD_WIDTH)])
-        
+
         count = len(full_lines)
         if count > 0:
             self.score += (count ** 2) * 100
         return count
 
-    def add_garbage_lines(self, num_lines):
-        for _ in range(num_lines):
+    def make_garbage_holes(self, num_lines):
+        return [self.garbage_rng.randrange(BOARD_WIDTH) for _ in range(num_lines)]
+
+    def add_garbage_lines(self, num_lines, holes):
+        for i in range(num_lines):
+            hole_idx = holes[i] if i < len(holes) else 0
             self.board.pop(0)
             garbage_row = [8 for _ in range(BOARD_WIDTH)]
-            hole_idx = random.randint(0, BOARD_WIDTH - 1)
-            garbage_row[hole_idx] = 0
+            garbage_row[hole_idx % BOARD_WIDTH] = 0
             self.board.append(garbage_row)
-            
+
             if self.check_collision(self.current_piece, self.current_x, self.current_y):
                 self.current_y -= 1
                 if self.check_collision(self.current_piece, self.current_x, self.current_y):
@@ -164,10 +194,13 @@ clock = pygame.time.Clock()
 
 player_id = None
 game_started = False
-game_seed = None
+tetris = None
 opponent_board = [[0 for _ in range(BOARD_WIDTH)] for _ in range(BOARD_HEIGHT)]
 
-tetris = TetrisGame()
+# A thread de rede só deposita aqui, quem mexe no jogo é o loop principal
+state_lock = threading.Lock()
+pending_seed = None
+pending_garbage = []
 
 COLORS = [
     (0, 0, 0),        # 0: Vazio
@@ -185,7 +218,7 @@ font = pygame.font.SysFont(None, 24)
 
 # Thread para escutar o stream contínuo de dados do servidor TCP
 def receive_server_messages():
-    global game_started, opponent_board, game_seed, player_id
+    global opponent_board, player_id, pending_seed
     buffer = ""
     while True:
         try:
@@ -198,21 +231,22 @@ def receive_server_messages():
                 if not line.strip():
                     continue
                 message = json.loads(line)
-                
+
                 msg_type = message.get("type")
                 if msg_type == "WELCOME":
                     player_id = message.get("player_id")
                 elif msg_type == "START":
-                    game_seed = message.get("seed")
-                    random.seed(game_seed)
-                    game_started = True
-                    tetris.spawn_piece()
+                    with state_lock:
+                        pending_seed = message.get("seed")
                 elif msg_type == "BOARD_UPDATE":
                     if message.get("player_id") != player_id:
                         opponent_board = message.get("board")
                 elif msg_type == "GARBAGE":
                     if message.get("target_id") == player_id:
-                        tetris.add_garbage_lines(message.get("lines"))
+                        with state_lock:
+                            pending_garbage.append(
+                                (message.get("lines", 0), message.get("holes", []))
+                            )
         except Exception:
             break
 
@@ -228,21 +262,39 @@ def send_to_server(data_dict):
     except:
         pass
 
+def send_garbage(lines):
+    opp_id = 2 if player_id == 1 else 1
+    send_to_server({
+        "type": "GARBAGE",
+        "target_id": opp_id,
+        "lines": lines,
+        "holes": tetris.make_garbage_holes(lines)
+    })
+
 running = True
 while running:
     screen.fill((25, 25, 25))
-    
+
+    # Inicia a partida assim que a seed do servidor chega
+    with state_lock:
+        seed = pending_seed
+        pending_seed = None
+    if seed is not None:
+        tetris = TetrisGame(seed)
+        game_started = True
+
+    playing = game_started and tetris is not None and not tetris.game_over
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
-            
-        elif event.type == FALL_EVENT and game_started and not tetris.game_over:
+
+        elif event.type == FALL_EVENT and playing:
             garbage_sent = tetris.update_gravity()
             if garbage_sent > 0:
-                opp_id = 2 if player_id == 1 else 1
-                send_to_server({"type": "GARBAGE", "target_id": opp_id, "lines": garbage_sent})
-            
-        elif event.type == pygame.KEYDOWN and game_started and not tetris.game_over:
+                send_garbage(garbage_sent)
+
+        elif event.type == pygame.KEYDOWN and playing:
             garbage_sent = 0
             if event.key == pygame.K_LEFT:
                 tetris.move(-1, 0)
@@ -254,12 +306,20 @@ while running:
                 tetris.rotate_piece()
             elif event.key == pygame.K_SPACE:
                 garbage_sent = tetris.hard_drop()
-            
-            if garbage_sent > 0:
-                opp_id = 2 if player_id == 1 else 1
-                send_to_server({"type": "GARBAGE", "target_id": opp_id, "lines": garbage_sent})
 
-    if game_started:
+            if garbage_sent > 0:
+                send_garbage(garbage_sent)
+
+    # Aplica o lixo recebido pela rede na thread principal
+    if tetris is not None:
+        with state_lock:
+            incoming = pending_garbage[:]
+            del pending_garbage[:]
+        for lines, holes in incoming:
+            if lines > 0:
+                tetris.add_garbage_lines(lines, holes)
+
+    if game_started and tetris is not None:
         send_to_server({
             "type": "BOARD_UPDATE",
             "player_id": player_id,
