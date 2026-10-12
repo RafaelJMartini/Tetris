@@ -1,12 +1,12 @@
 # Tetris Multiplayer
 
-Um jogo de Tetris competitivo para dois jogadores desenvolvido em **Python**, utilizando **Pygame** para a interface gráfica e comunicação em tempo real via **Sockets UDP**. 
+Um jogo de Tetris competitivo para dois jogadores desenvolvido em **Python**, utilizando **Pygame** para a interface gráfica e comunicação em tempo real via **Sockets TCP**. 
 
 ---
 
 ## Funcionalidades
 
-- **Multiplayer via UDP:** Comunicação rápida e descentralizada gerenciada por um servidor central.
+- **Multiplayer via TCP:** Comunicação rápida e descentralizada gerenciada por um servidor central.
 - **Sincronização de Peças (Seed):** Ambos os jogadores recebem exatamente a mesma sequência de tetraminós na mesma ordem.
 - **Mecânicas Clássicas:**
   - Rotação de peças com Wall Kick básico.

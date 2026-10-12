@@ -70,14 +70,11 @@ class TetrisGame:
             self.current_x = new_x
             self.current_y = new_y
             return 0
-        
-        # Se tentou descer (dy > 0) e colidiu, fixa a peça e retorna o lixo gerado
         if dy > 0:
             return self.lock_piece()
         return 0
 
     def hard_drop(self):
-        """Move a peça instantaneamente para baixo até o limite e a fixa, retornando o lixo gerado."""
         if self.game_over: return 0
         while not self.check_collision(self.current_piece, self.current_x, self.current_y + 1):
             self.current_y += 1
@@ -94,7 +91,6 @@ class TetrisGame:
         
         lines_cleared = self.clear_lines()
         
-        # Regra de envio de lixo
         garbage_sent = 0
         if lines_cleared == 2:
             garbage_sent = 1
@@ -145,11 +141,16 @@ class TetrisGame:
                             temp_board[by][bx] = self.current_shape_idx + 1
         return temp_board
 
-# ==================== REDE E PYGAME ====================
+# ==================== REDE TCP E PYGAME ====================
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 50005
 
-client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    client_socket.connect((SERVER_HOST, SERVER_PORT))
+except Exception as e:
+    print(f"Não foi possível conectar ao servidor: {e}")
+    sys.exit()
 
 WIDTH, HEIGHT = 650, 520
 GRID_SIZE = 22
@@ -158,7 +159,7 @@ pygame.init()
 pygame.key.set_repeat(200, 50)
 
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Tetris Multiplayer UDP")
+pygame.display.set_caption("Tetris Multiplayer TCP")
 clock = pygame.time.Clock()
 
 player_id = None
@@ -181,48 +182,37 @@ COLORS = [
 ]
 
 font = pygame.font.SysFont(None, 24)
-screen.fill((25, 25, 25))
-txt = font.render("Conectando ao servidor...", True, (255, 255, 255))
-screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, HEIGHT // 2))
-pygame.display.flip()
 
-# Handshake inicial
-client_socket.settimeout(1.0)
-while player_id is None:
-    try:
-        client_socket.sendto(json.dumps({"type": "JOIN"}).encode('utf-8'), (SERVER_HOST, SERVER_PORT))
-        data, _ = client_socket.recvfrom(4096)
-        msg = json.loads(data.decode('utf-8'))
-        if msg.get("type") == "WELCOME":
-            player_id = msg.get("player_id")
-    except socket.timeout:
-        continue
-    except Exception:
-        continue
-
-client_socket.setblocking(False)
-
+# Thread para escutar o stream contínuo de dados do servidor TCP
 def receive_server_messages():
-    global game_started, opponent_board, game_seed
+    global game_started, opponent_board, game_seed, player_id
+    buffer = ""
     while True:
         try:
-            data, _ = client_socket.recvfrom(4096)
-            message = json.loads(data.decode('utf-8'))
-            
-            msg_type = message.get("type")
-            if msg_type == "START":
-                game_seed = message.get("seed")
-                random.seed(game_seed)
-                game_started = True
-                tetris.spawn_piece()
-            elif msg_type == "BOARD_UPDATE":
-                if message.get("player_id") != player_id:
-                    opponent_board = message.get("board")
-            elif msg_type == "GARBAGE":
-                if message.get("target_id") == player_id:
-                    tetris.add_garbage_lines(message.get("lines"))
-        except BlockingIOError:
-            continue
+            data = client_socket.recv(4096)
+            if not data:
+                break
+            buffer += data.decode('utf-8')
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                if not line.strip():
+                    continue
+                message = json.loads(line)
+                
+                msg_type = message.get("type")
+                if msg_type == "WELCOME":
+                    player_id = message.get("player_id")
+                elif msg_type == "START":
+                    game_seed = message.get("seed")
+                    random.seed(game_seed)
+                    game_started = True
+                    tetris.spawn_piece()
+                elif msg_type == "BOARD_UPDATE":
+                    if message.get("player_id") != player_id:
+                        opponent_board = message.get("board")
+                elif msg_type == "GARBAGE":
+                    if message.get("target_id") == player_id:
+                        tetris.add_garbage_lines(message.get("lines"))
         except Exception:
             break
 
@@ -231,18 +221,12 @@ threading.Thread(target=receive_server_messages, daemon=True).start()
 FALL_EVENT = pygame.USEREVENT + 1
 pygame.time.set_timer(FALL_EVENT, 500)
 
-def send_garbage(lines_count):
-    if lines_count > 0:
-        opp_id = 2 if player_id == 1 else 1
-        garbage_msg = json.dumps({
-            "type": "GARBAGE",
-            "target_id": opp_id,
-            "lines": lines_count
-        })
-        try:
-            client_socket.sendto(garbage_msg.encode('utf-8'), (SERVER_HOST, SERVER_PORT))
-        except:
-            pass
+def send_to_server(data_dict):
+    try:
+        message_str = json.dumps(data_dict) + "\n"
+        client_socket.sendall(message_str.encode('utf-8'))
+    except:
+        pass
 
 running = True
 while running:
@@ -254,7 +238,9 @@ while running:
             
         elif event.type == FALL_EVENT and game_started and not tetris.game_over:
             garbage_sent = tetris.update_gravity()
-            send_garbage(garbage_sent)
+            if garbage_sent > 0:
+                opp_id = 2 if player_id == 1 else 1
+                send_to_server({"type": "GARBAGE", "target_id": opp_id, "lines": garbage_sent})
             
         elif event.type == pygame.KEYDOWN and game_started and not tetris.game_over:
             garbage_sent = 0
@@ -269,21 +255,19 @@ while running:
             elif event.key == pygame.K_SPACE:
                 garbage_sent = tetris.hard_drop()
             
-            send_garbage(garbage_sent)
+            if garbage_sent > 0:
+                opp_id = 2 if player_id == 1 else 1
+                send_to_server({"type": "GARBAGE", "target_id": opp_id, "lines": garbage_sent})
 
     if game_started:
-        update_msg = json.dumps({
+        send_to_server({
             "type": "BOARD_UPDATE",
             "player_id": player_id,
             "board": tetris.board
         })
-        try:
-            client_socket.sendto(update_msg.encode('utf-8'), (SERVER_HOST, SERVER_PORT))
-        except:
-            pass
 
     if not game_started:
-        status_txt = f"Conectado como Jogador {player_id}. Aguardando o 2º jogador..."
+        status_txt = "Conectado ao servidor. Aguardando o 2º jogador..." if player_id is None else f"Conectado como Jogador {player_id}. Aguardando o 2º jogador..."
         txt = font.render(status_txt, True, (255, 255, 255))
         screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, HEIGHT // 2))
     else:
