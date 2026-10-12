@@ -6,7 +6,7 @@ Um jogo de Tetris competitivo para dois jogadores desenvolvido em **Python**, ut
 
 ## Funcionalidades
 
-- **Multiplayer via TCP:** Comunicação rápida e descentralizada gerenciada por um servidor central.
+- **Multiplayer via TCP:** Comunicação confiável orientada a conexão, gerenciada por um servidor central.
 - **Sincronização de Peças (Seed):** Ambos os jogadores recebem exatamente a mesma sequência de tetraminós na mesma ordem.
 - **Mecânicas Clássicas:**
   - Rotação de peças com Wall Kick básico.
