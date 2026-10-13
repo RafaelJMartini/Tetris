@@ -199,6 +199,7 @@ player_id = None
 game_started = False
 tetris = None
 opponent_board = [[0 for _ in range(BOARD_WIDTH)] for _ in range(BOARD_HEIGHT)]
+opponent_score = 0
 
 match_over = False
 winner_id = None
@@ -226,7 +227,7 @@ big_font = pygame.font.SysFont(None, 48)
 
 # Thread para escutar o stream contínuo de dados do servidor TCP
 def receive_server_messages():
-    global opponent_board, player_id, pending_seed, match_over, winner_id
+    global opponent_board, opponent_score, player_id, pending_seed, match_over, winner_id
     buffer = ""
     while True:
         try:
@@ -249,6 +250,7 @@ def receive_server_messages():
                 elif msg_type == "BOARD_UPDATE":
                     if message.get("player_id") != player_id:
                         opponent_board = message.get("board")
+                        opponent_score = message.get("score", 0)
                 elif msg_type == "GARBAGE":
                     if message.get("target_id") == player_id:
                         with state_lock:
@@ -349,7 +351,8 @@ while running:
         send_to_server({
             "type": "BOARD_UPDATE",
             "player_id": player_id,
-            "board": tetris.board
+            "board": tetris.get_render_board(),
+            "score": tetris.score
         })
 
     if not game_started:
@@ -358,7 +361,7 @@ while running:
         screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, HEIGHT // 2))
     else:
         screen.blit(font.render(f"Seu Jogo (P{player_id}) - Score: {tetris.score}", True, (255, 255, 255)), (40, 20))
-        screen.blit(font.render("Oponente", True, (255, 255, 255)), (360, 20))
+        screen.blit(font.render(f"Oponente - Score: {opponent_score}", True, (255, 255, 255)), (360, 20))
 
         render_me = tetris.get_render_board()
         for r in range(BOARD_HEIGHT):
