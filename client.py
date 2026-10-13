@@ -200,6 +200,10 @@ game_started = False
 tetris = None
 opponent_board = [[0 for _ in range(BOARD_WIDTH)] for _ in range(BOARD_HEIGHT)]
 
+match_over = False
+winner_id = None
+game_over_sent = False
+
 # A thread de rede só deposita aqui, quem mexe no jogo é o loop principal
 state_lock = threading.Lock()
 pending_seed = None
@@ -218,10 +222,11 @@ COLORS = [
 ]
 
 font = pygame.font.SysFont(None, 24)
+big_font = pygame.font.SysFont(None, 48)
 
 # Thread para escutar o stream contínuo de dados do servidor TCP
 def receive_server_messages():
-    global opponent_board, player_id, pending_seed
+    global opponent_board, player_id, pending_seed, match_over, winner_id
     buffer = ""
     while True:
         try:
@@ -250,6 +255,9 @@ def receive_server_messages():
                             pending_garbage.append(
                                 (message.get("lines", 0), message.get("holes", []))
                             )
+                elif msg_type == "MATCH_END":
+                    winner_id = message.get("winner_id")
+                    match_over = True
         except Exception:
             break
 
@@ -296,7 +304,7 @@ while running:
         tetris = TetrisGame(seed)
         game_started = True
 
-    playing = game_started and tetris is not None and not tetris.game_over
+    playing = game_started and tetris is not None and not tetris.game_over and not match_over
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -324,7 +332,7 @@ while running:
                 send_garbage(garbage_sent)
 
     # Aplica o lixo recebido pela rede na thread principal
-    if tetris is not None:
+    if tetris is not None and not match_over:
         with state_lock:
             incoming = pending_garbage[:]
             del pending_garbage[:]
@@ -332,7 +340,12 @@ while running:
             if lines > 0:
                 tetris.add_garbage_lines(lines, holes)
 
-    if game_started and tetris is not None:
+    # Avisa o servidor uma vez só, ele que decide o vencedor
+    if tetris is not None and tetris.game_over and not game_over_sent:
+        send_to_server({"type": "GAME_OVER", "player_id": player_id})
+        game_over_sent = True
+
+    if game_started and tetris is not None and not match_over:
         send_to_server({
             "type": "BOARD_UPDATE",
             "player_id": player_id,
@@ -365,9 +378,19 @@ while running:
         screen.blit(font.render("PRÓXIMA", True, (255, 255, 255)), (272, 60))
         draw_piece_preview(tetris.next_shape_idx(), 275, 85)
 
-        if tetris.game_over:
-            go_txt = font.render("GAME OVER", True, (255, 0, 0))
-            screen.blit(go_txt, (100, HEIGHT // 2))
+        if match_over:
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            screen.blit(overlay, (0, 0))
+
+            if winner_id == player_id:
+                result_txt = big_font.render("VOCÊ VENCEU!", True, (0, 255, 0))
+            else:
+                result_txt = big_font.render("VOCÊ PERDEU!", True, (255, 0, 0))
+            screen.blit(result_txt, (WIDTH // 2 - result_txt.get_width() // 2, HEIGHT // 2 - 20))
+        elif tetris.game_over:
+            go_txt = font.render("GAME OVER - aguardando o servidor...", True, (255, 0, 0))
+            screen.blit(go_txt, (WIDTH // 2 - go_txt.get_width() // 2, HEIGHT // 2))
 
     pygame.display.flip()
     clock.tick(30)
