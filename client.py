@@ -65,6 +65,9 @@ class TetrisGame:
         if self.check_collision(self.current_piece, self.current_x, self.current_y):
             self.game_over = True
 
+    def next_shape_idx(self):
+        return self.bag.peek()
+
     def check_collision(self, shape, offset_x, offset_y):
         for r_idx, row in enumerate(shape):
             for c_idx, cell in enumerate(row):
@@ -271,6 +274,16 @@ def send_garbage(lines):
         "holes": tetris.make_garbage_holes(lines)
     })
 
+def draw_piece_preview(shape_idx, origin_x, origin_y, cell=18):
+    shape = SHAPES[shape_idx]
+    for r_idx, row in enumerate(shape):
+        for c_idx, value in enumerate(row):
+            if value:
+                pygame.draw.rect(
+                    screen, COLORS[shape_idx + 1],
+                    (origin_x + c_idx * cell, origin_y + r_idx * cell, cell - 1, cell - 1)
+                )
+
 running = True
 while running:
     screen.fill((25, 25, 25))
@@ -348,6 +361,9 @@ while running:
                 color = COLORS[val]
                 pygame.draw.rect(screen, color, (360 + c*GRID_SIZE, 50 + r*GRID_SIZE, GRID_SIZE-1, GRID_SIZE-1))
                 pygame.draw.rect(screen, (40, 40, 40), (360 + c*GRID_SIZE, 50 + r*GRID_SIZE, GRID_SIZE-1, GRID_SIZE-1), 1)
+
+        screen.blit(font.render("PRÓXIMA", True, (255, 255, 255)), (272, 60))
+        draw_piece_preview(tetris.next_shape_idx(), 275, 85)
 
         if tetris.game_over:
             go_txt = font.render("GAME OVER", True, (255, 0, 0))
