@@ -1,10 +1,13 @@
 import socket
 import json
+import sys
 import threading
 import random
 
-HOST = '127.0.0.1'
-PORT = 50005
+# Uso: python server.py [porta]
+# 0.0.0.0 pra aceitar conexão de outras máquinas
+HOST = '0.0.0.0'
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 50005
 
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 # O REUSEADDR evita o erro "Address already in use" se reiniciar rápido

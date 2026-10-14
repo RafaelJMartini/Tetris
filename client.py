@@ -175,8 +175,10 @@ class TetrisGame:
         return temp_board
 
 # ==================== REDE TCP E PYGAME ====================
-SERVER_HOST = '127.0.0.1'
-SERVER_PORT = 50005
+# Uso: python client.py [host] [porta]
+SERVER_HOST = sys.argv[1] if len(sys.argv) > 1 else '127.0.0.1'
+SERVER_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 50005
+print(f"Conectando em {SERVER_HOST}:{SERVER_PORT}...")
 
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 try:
@@ -185,8 +187,18 @@ except Exception as e:
     print(f"Não foi possível conectar ao servidor: {e}")
     sys.exit()
 
-WIDTH, HEIGHT = 650, 520
 GRID_SIZE = 22
+BOARD_PX_W = BOARD_WIDTH * GRID_SIZE
+BOARD_PX_H = BOARD_HEIGHT * GRID_SIZE
+
+MARGEM = 30
+BOARD_Y = 80
+MEU_X = MARGEM
+PAINEL_X = MEU_X + BOARD_PX_W + 20
+PAINEL_W = 150
+OPP_X = PAINEL_X + PAINEL_W + 20
+WIDTH = OPP_X + BOARD_PX_W + MARGEM
+HEIGHT = BOARD_Y + BOARD_PX_H + 50
 
 pygame.init()
 pygame.key.set_repeat(200, 50)
@@ -223,6 +235,7 @@ COLORS = [
 ]
 
 font = pygame.font.SysFont(None, 24)
+small_font = pygame.font.SysFont(None, 19)
 big_font = pygame.font.SysFont(None, 48)
 
 # Thread para escutar o stream contínuo de dados do servidor TCP
@@ -284,15 +297,33 @@ def send_garbage(lines):
         "holes": tetris.make_garbage_holes(lines)
     })
 
-def draw_piece_preview(shape_idx, origin_x, origin_y, cell=18):
+def draw_board(board, origin_x, origin_y):
+    pygame.draw.rect(screen, (70, 70, 70),
+                     (origin_x - 3, origin_y - 3, BOARD_PX_W + 6, BOARD_PX_H + 6), 2)
+    for r in range(BOARD_HEIGHT):
+        for c in range(BOARD_WIDTH):
+            rect = (origin_x + c * GRID_SIZE, origin_y + r * GRID_SIZE, GRID_SIZE - 1, GRID_SIZE - 1)
+            pygame.draw.rect(screen, COLORS[board[r][c]], rect)
+            pygame.draw.rect(screen, (40, 40, 40), rect, 1)
+
+def draw_next_piece(shape_idx, box_x, box_y, box_w, box_h, cell=20):
+    pygame.draw.rect(screen, (70, 70, 70), (box_x, box_y, box_w, box_h), 2)
     shape = SHAPES[shape_idx]
+    piece_w = len(shape[0]) * cell
+    piece_h = len(shape) * cell
+    ox = box_x + (box_w - piece_w) // 2
+    oy = box_y + (box_h - piece_h) // 2
     for r_idx, row in enumerate(shape):
         for c_idx, value in enumerate(row):
             if value:
                 pygame.draw.rect(
                     screen, COLORS[shape_idx + 1],
-                    (origin_x + c_idx * cell, origin_y + r_idx * cell, cell - 1, cell - 1)
+                    (ox + c_idx * cell, oy + r_idx * cell, cell - 1, cell - 1)
                 )
+
+def draw_center_text(texto, surface_font, cor, y):
+    txt = surface_font.render(texto, True, cor)
+    screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, y))
 
 running = True
 while running:
@@ -356,44 +387,52 @@ while running:
         })
 
     if not game_started:
-        status_txt = "Conectado ao servidor. Aguardando o 2º jogador..." if player_id is None else f"Conectado como Jogador {player_id}. Aguardando o 2º jogador..."
-        txt = font.render(status_txt, True, (255, 255, 255))
-        screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, HEIGHT // 2))
+        if player_id is None:
+            draw_center_text("Conectado ao servidor. Aguardando o 2º jogador...", font, (255, 255, 255), HEIGHT // 2)
+        else:
+            draw_center_text(f"Conectado como Jogador {player_id}. Aguardando o 2º jogador...",
+                             font, (255, 255, 255), HEIGHT // 2)
     else:
-        screen.blit(font.render(f"Seu Jogo (P{player_id}) - Score: {tetris.score}", True, (255, 255, 255)), (40, 20))
-        screen.blit(font.render(f"Oponente - Score: {opponent_score}", True, (255, 255, 255)), (360, 20))
+        screen.blit(font.render(f"VOCÊ (P{player_id})", True, (255, 255, 255)), (MEU_X, 28))
+        screen.blit(font.render(f"Score: {tetris.score}", True, (200, 200, 200)), (MEU_X, 52))
 
-        render_me = tetris.get_render_board()
-        for r in range(BOARD_HEIGHT):
-            for c in range(BOARD_WIDTH):
-                val = render_me[r][c]
-                color = COLORS[val]
-                pygame.draw.rect(screen, color, (40 + c*GRID_SIZE, 50 + r*GRID_SIZE, GRID_SIZE-1, GRID_SIZE-1))
-                pygame.draw.rect(screen, (40, 40, 40), (40 + c*GRID_SIZE, 50 + r*GRID_SIZE, GRID_SIZE-1, GRID_SIZE-1), 1)
+        oponente_id = 2 if player_id == 1 else 1
+        screen.blit(font.render(f"OPONENTE (P{oponente_id})", True, (255, 255, 255)), (OPP_X, 28))
+        screen.blit(font.render(f"Score: {opponent_score}", True, (200, 200, 200)), (OPP_X, 52))
 
-        for r in range(BOARD_HEIGHT):
-            for c in range(BOARD_WIDTH):
-                val = opponent_board[r][c]
-                color = COLORS[val]
-                pygame.draw.rect(screen, color, (360 + c*GRID_SIZE, 50 + r*GRID_SIZE, GRID_SIZE-1, GRID_SIZE-1))
-                pygame.draw.rect(screen, (40, 40, 40), (360 + c*GRID_SIZE, 50 + r*GRID_SIZE, GRID_SIZE-1, GRID_SIZE-1), 1)
+        draw_board(tetris.get_render_board(), MEU_X, BOARD_Y)
+        draw_board(opponent_board, OPP_X, BOARD_Y)
 
-        screen.blit(font.render("PRÓXIMA", True, (255, 255, 255)), (272, 60))
-        draw_piece_preview(tetris.next_shape_idx(), 275, 85)
+        screen.blit(font.render("PRÓXIMA", True, (255, 255, 255)), (PAINEL_X + 20, BOARD_Y + 6))
+        draw_next_piece(tetris.next_shape_idx(), PAINEL_X, BOARD_Y + 30, PAINEL_W, 110)
+
+        ataque = ["2 linhas", "3 linhas", "4 linhas"]
+        envia = ["1 de lixo", "2 de lixo", "4 de lixo"]
+        screen.blit(small_font.render("ATAQUE", True, (255, 255, 255)), (PAINEL_X + 20, BOARD_Y + 165))
+        for i, (a, e) in enumerate(zip(ataque, envia)):
+            screen.blit(small_font.render(f"{a} -> {e}", True, (150, 150, 150)),
+                        (PAINEL_X + 12, BOARD_Y + 190 + i * 20))
+
+        draw_center_text("<- -> mover    ^ girar    v descer    ESPAÇO hard drop",
+                         small_font, (130, 130, 130), BOARD_Y + BOARD_PX_H + 18)
 
         if match_over:
             overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-            overlay.fill((0, 0, 0, 180))
+            overlay.fill((0, 0, 0, 190))
             screen.blit(overlay, (0, 0))
 
-            if winner_id == player_id:
-                result_txt = big_font.render("VOCÊ VENCEU!", True, (0, 255, 0))
-            else:
-                result_txt = big_font.render("VOCÊ PERDEU!", True, (255, 0, 0))
-            screen.blit(result_txt, (WIDTH // 2 - result_txt.get_width() // 2, HEIGHT // 2 - 20))
+            venceu = winner_id == player_id
+            caixa_w, caixa_h = 420, 120
+            caixa = (WIDTH // 2 - caixa_w // 2, HEIGHT // 2 - caixa_h // 2, caixa_w, caixa_h)
+            pygame.draw.rect(screen, (18, 18, 18), caixa)
+            pygame.draw.rect(screen, (0, 200, 0) if venceu else (200, 0, 0), caixa, 3)
+
+            draw_center_text("VOCÊ VENCEU!" if venceu else "VOCÊ PERDEU!",
+                             big_font, (0, 255, 0) if venceu else (255, 0, 0), caixa[1] + 25)
+            draw_center_text(f"Score final: {tetris.score}  x  {opponent_score}",
+                             font, (200, 200, 200), caixa[1] + 72)
         elif tetris.game_over:
-            go_txt = font.render("GAME OVER - aguardando o servidor...", True, (255, 0, 0))
-            screen.blit(go_txt, (WIDTH // 2 - go_txt.get_width() // 2, HEIGHT // 2))
+            draw_center_text("GAME OVER - aguardando o servidor...", font, (255, 0, 0), HEIGHT // 2)
 
     pygame.display.flip()
     clock.tick(30)
