@@ -149,6 +149,9 @@ class TetrisGame:
     def add_garbage_lines(self, num_lines, holes):
         for i in range(num_lines):
             hole_idx = holes[i] if i < len(holes) else 0
+            # Se a linha que vai sair ainda tem bloco, estourou o topo
+            if any(cell != 0 for cell in self.board[0]):
+                self.game_over = True
             self.board.pop(0)
             garbage_row = [8 for _ in range(BOARD_WIDTH)]
             garbage_row[hole_idx % BOARD_WIDTH] = 0
@@ -215,7 +218,9 @@ opponent_score = 0
 
 match_over = False
 winner_id = None
+match_reason = None
 game_over_sent = False
+conexao_perdida = False
 
 # A thread de rede só deposita aqui, quem mexe no jogo é o loop principal
 state_lock = threading.Lock()
@@ -240,7 +245,8 @@ big_font = pygame.font.SysFont(None, 48)
 
 # Thread para escutar o stream contínuo de dados do servidor TCP
 def receive_server_messages():
-    global opponent_board, opponent_score, player_id, pending_seed, match_over, winner_id
+    global opponent_board, opponent_score, player_id
+    global pending_seed, match_over, winner_id, match_reason, conexao_perdida
     buffer = ""
     while True:
         try:
@@ -272,9 +278,11 @@ def receive_server_messages():
                             )
                 elif msg_type == "MATCH_END":
                     winner_id = message.get("winner_id")
+                    match_reason = message.get("reason")
                     match_over = True
         except Exception:
             break
+    conexao_perdida = True
 
 threading.Thread(target=receive_server_messages, daemon=True).start()
 
@@ -337,7 +345,8 @@ while running:
         tetris = TetrisGame(seed)
         game_started = True
 
-    playing = game_started and tetris is not None and not tetris.game_over and not match_over
+    playing = (game_started and tetris is not None and not tetris.game_over
+               and not match_over and not conexao_perdida)
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -387,7 +396,9 @@ while running:
         })
 
     if not game_started:
-        if player_id is None:
+        if conexao_perdida:
+            draw_center_text("Conexão com o servidor perdida.", font, (255, 80, 80), HEIGHT // 2)
+        elif player_id is None:
             draw_center_text("Conectado ao servidor. Aguardando o 2º jogador...", font, (255, 255, 255), HEIGHT // 2)
         else:
             draw_center_text(f"Conectado como Jogador {player_id}. Aguardando o 2º jogador...",
@@ -429,8 +440,13 @@ while running:
 
             draw_center_text("VOCÊ VENCEU!" if venceu else "VOCÊ PERDEU!",
                              big_font, (0, 255, 0) if venceu else (255, 0, 0), caixa[1] + 25)
-            draw_center_text(f"Score final: {tetris.score}  x  {opponent_score}",
-                             font, (200, 200, 200), caixa[1] + 72)
+            if match_reason == "desconexao":
+                detalhe = "o oponente desconectou" if venceu else "você foi desconectado"
+            else:
+                detalhe = f"Score final: {tetris.score}  x  {opponent_score}"
+            draw_center_text(detalhe, font, (200, 200, 200), caixa[1] + 72)
+        elif conexao_perdida:
+            draw_center_text("Conexão com o servidor perdida.", font, (255, 80, 80), HEIGHT // 2)
         elif tetris.game_over:
             draw_center_text("GAME OVER - aguardando o servidor...", font, (255, 0, 0), HEIGHT // 2)
 

@@ -22,6 +22,7 @@ game_seed = random.randint(1, 1000000)
 
 # O primeiro GAME_OVER que chegar decide o vencedor
 match_lock = threading.Lock()
+match_started = False
 match_over = False
 
 def broadcast(payload):
@@ -32,8 +33,19 @@ def broadcast(payload):
         except Exception:
             pass
 
+def encerrar_partida(loser_id, reason):
+    global match_over
+    with match_lock:
+        if match_over or not match_started:
+            return
+        match_over = True
+    winner_id = 2 if loser_id == 1 else 1
+    print(f"[SERVIDOR] Jogador {loser_id} perdeu ({reason}). Vencedor: Jogador {winner_id}")
+    broadcast({"type": "MATCH_END", "winner_id": winner_id,
+               "loser_id": loser_id, "reason": reason})
+
 def handle_client(client_socket, addr, player_id):
-    global clients, match_over
+    global clients, match_started
     print(f"[SERVIDOR] Jogador {player_id} conectado: {addr}")
 
     welcome_msg = json.dumps({"type": "WELCOME", "player_id": player_id}) + "\n"
@@ -42,6 +54,8 @@ def handle_client(client_socket, addr, player_id):
     # Se já temos 2 clientes, envia o comando START com a seed para ambos
     if len(clients) == 2:
         print("[SERVIDOR] Sala cheia! Iniciando o jogo...")
+        with match_lock:
+            match_started = True
         broadcast({"type": "START", "seed": game_seed})
 
     buffer = ""
@@ -67,13 +81,7 @@ def handle_client(client_socket, addr, player_id):
 
                 elif msg_type == "GAME_OVER":
                     # Encerra a partida para os dois ao mesmo tempo
-                    with match_lock:
-                        if match_over:
-                            continue
-                        match_over = True
-                    winner_id = 2 if player_id == 1 else 1
-                    print(f"[SERVIDOR] Jogador {player_id} perdeu. Vencedor: Jogador {winner_id}")
-                    broadcast({"type": "MATCH_END", "winner_id": winner_id, "loser_id": player_id})
+                    encerrar_partida(player_id, "game_over")
 
         except Exception as e:
             print(f"[ERRO] Jogador {player_id} desconectado: {e}")
@@ -81,6 +89,9 @@ def handle_client(client_socket, addr, player_id):
 
     clients = [c for c in clients if c[0] != client_socket]
     client_socket.close()
+    print(f"[SERVIDOR] Jogador {player_id} saiu.")
+    # Quem cai no meio da partida entrega a vitória para o adversário
+    encerrar_partida(player_id, "desconexao")
 
 # Loop principal aceitando conexões
 while len(clients) < 2:
@@ -91,5 +102,4 @@ while len(clients) < 2:
     threading.Thread(target=handle_client, args=(sock, addr, player_id), daemon=True).start()
 
 # Mantém o servidor rodando em segundo plano
-while True:
-    pass
+threading.Event().wait()
