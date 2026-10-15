@@ -333,6 +333,8 @@ def draw_center_text(texto, surface_font, cor, y):
     txt = surface_font.render(texto, True, cor)
     screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, y))
 
+ultimo_estado_enviado = None
+
 running = True
 while running:
     screen.fill((25, 25, 25))
@@ -388,12 +390,15 @@ while running:
         game_over_sent = True
 
     if game_started and tetris is not None and not match_over:
-        send_to_server({
-            "type": "BOARD_UPDATE",
-            "player_id": player_id,
-            "board": tetris.get_render_board(),
-            "score": tetris.score
-        })
+        estado = (tetris.get_render_board(), tetris.score)
+        if estado != ultimo_estado_enviado:
+            send_to_server({
+                "type": "BOARD_UPDATE",
+                "player_id": player_id,
+                "board": estado[0],
+                "score": estado[1]
+            })
+            ultimo_estado_enviado = estado
 
     if not game_started:
         if conexao_perdida:
