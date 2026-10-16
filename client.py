@@ -8,6 +8,13 @@ import random
 # ==================== LÓGICA DO TETRIS ====================
 BOARD_WIDTH = 10
 BOARD_HEIGHT = 20
+GHOST = 9   # só usado na hora de desenhar
+
+# Tempo de queda em ms, vai diminuindo conforme o nível sobe
+VELOCIDADE_INICIAL = 500
+VELOCIDADE_MINIMA = 110
+ACELERACAO = 45
+LINHAS_POR_NIVEL = 10
 
 SHAPES = [
     [[1, 1, 1, 1]], # I
@@ -55,7 +62,14 @@ class TetrisGame:
         self.current_shape_idx = 0
         self.game_over = False
         self.score = 0
+        self.total_lines = 0
         self.spawn_piece()
+
+    def level(self):
+        return 1 + self.total_lines // LINHAS_POR_NIVEL
+
+    def fall_interval(self):
+        return max(VELOCIDADE_MINIMA, VELOCIDADE_INICIAL - (self.level() - 1) * ACELERACAO)
 
     def spawn_piece(self):
         self.current_shape_idx = self.bag.next()
@@ -140,7 +154,8 @@ class TetrisGame:
 
         count = len(full_lines)
         if count > 0:
-            self.score += (count ** 2) * 100
+            self.score += (count ** 2) * 100 * self.level()
+            self.total_lines += count
         return count
 
     def make_garbage_holes(self, num_lines):
@@ -165,8 +180,24 @@ class TetrisGame:
     def update_gravity(self):
         return self.move(0, 1)
 
-    def get_render_board(self):
+    def ghost_y(self):
+        y = self.current_y
+        while not self.check_collision(self.current_piece, self.current_x, y + 1):
+            y += 1
+        return y
+
+    def get_render_board(self, ghost=False):
         temp_board = [row[:] for row in self.board]
+        # A sombra fica só na tela de quem joga
+        if self.current_piece and ghost and not self.game_over:
+            gy = self.ghost_y()
+            for r_idx, row in enumerate(self.current_piece):
+                for c_idx, cell in enumerate(row):
+                    if cell:
+                        bx = self.current_x + c_idx
+                        by = gy + r_idx
+                        if 0 <= by < BOARD_HEIGHT and 0 <= bx < BOARD_WIDTH and temp_board[by][bx] == 0:
+                            temp_board[by][bx] = GHOST
         if self.current_piece:
             for r_idx, row in enumerate(self.current_piece):
                 for c_idx, cell in enumerate(row):
@@ -236,7 +267,8 @@ COLORS = [
     (255, 0, 0),      # 5: Z - Vermelho
     (0, 0, 255),      # 6: J - Azul
     (255, 127, 0),    # 7: L - Laranja
-    (100, 100, 100)   # 8: Linha de Lixo (Cinza)
+    (100, 100, 100),  # 8: Linha de Lixo (Cinza)
+    (120, 120, 120)   # 9: Sombra da peça
 ]
 
 font = pygame.font.SysFont(None, 24)
@@ -287,7 +319,8 @@ def receive_server_messages():
 threading.Thread(target=receive_server_messages, daemon=True).start()
 
 FALL_EVENT = pygame.USEREVENT + 1
-pygame.time.set_timer(FALL_EVENT, 500)
+intervalo_queda = VELOCIDADE_INICIAL
+pygame.time.set_timer(FALL_EVENT, intervalo_queda)
 
 def send_to_server(data_dict):
     try:
@@ -310,9 +343,13 @@ def draw_board(board, origin_x, origin_y):
                      (origin_x - 3, origin_y - 3, BOARD_PX_W + 6, BOARD_PX_H + 6), 2)
     for r in range(BOARD_HEIGHT):
         for c in range(BOARD_WIDTH):
+            val = board[r][c]
             rect = (origin_x + c * GRID_SIZE, origin_y + r * GRID_SIZE, GRID_SIZE - 1, GRID_SIZE - 1)
-            pygame.draw.rect(screen, COLORS[board[r][c]], rect)
+            pygame.draw.rect(screen, COLORS[0] if val == GHOST else COLORS[val], rect)
             pygame.draw.rect(screen, (40, 40, 40), rect, 1)
+            if val == GHOST:
+                # Contorno vazado pra não confundir com a linha de lixo
+                pygame.draw.rect(screen, COLORS[GHOST], rect, 2)
 
 def draw_next_piece(shape_idx, box_x, box_y, box_w, box_h, cell=20):
     pygame.draw.rect(screen, (70, 70, 70), (box_x, box_y, box_w, box_h), 2)
@@ -346,6 +383,13 @@ while running:
     if seed is not None:
         tetris = TetrisGame(seed)
         game_started = True
+        intervalo_queda = tetris.fall_interval()
+        pygame.time.set_timer(FALL_EVENT, intervalo_queda)
+
+    # A gravidade acelera junto com o nível
+    if tetris is not None and tetris.fall_interval() != intervalo_queda:
+        intervalo_queda = tetris.fall_interval()
+        pygame.time.set_timer(FALL_EVENT, intervalo_queda)
 
     playing = (game_started and tetris is not None and not tetris.game_over
                and not match_over and not conexao_perdida)
@@ -416,18 +460,23 @@ while running:
         screen.blit(font.render(f"OPONENTE (P{oponente_id})", True, (255, 255, 255)), (OPP_X, 28))
         screen.blit(font.render(f"Score: {opponent_score}", True, (200, 200, 200)), (OPP_X, 52))
 
-        draw_board(tetris.get_render_board(), MEU_X, BOARD_Y)
+        draw_board(tetris.get_render_board(ghost=True), MEU_X, BOARD_Y)
         draw_board(opponent_board, OPP_X, BOARD_Y)
 
         screen.blit(font.render("PRÓXIMA", True, (255, 255, 255)), (PAINEL_X + 20, BOARD_Y + 6))
         draw_next_piece(tetris.next_shape_idx(), PAINEL_X, BOARD_Y + 30, PAINEL_W, 110)
 
+        screen.blit(font.render(f"NÍVEL {tetris.level()}", True, (255, 255, 255)),
+                    (PAINEL_X + 20, BOARD_Y + 155))
+        screen.blit(small_font.render(f"{tetris.total_lines} linhas", True, (150, 150, 150)),
+                    (PAINEL_X + 20, BOARD_Y + 178))
+
         ataque = ["2 linhas", "3 linhas", "4 linhas"]
         envia = ["1 de lixo", "2 de lixo", "4 de lixo"]
-        screen.blit(small_font.render("ATAQUE", True, (255, 255, 255)), (PAINEL_X + 20, BOARD_Y + 165))
+        screen.blit(small_font.render("ATAQUE", True, (255, 255, 255)), (PAINEL_X + 20, BOARD_Y + 212))
         for i, (a, e) in enumerate(zip(ataque, envia)):
             screen.blit(small_font.render(f"{a} -> {e}", True, (150, 150, 150)),
-                        (PAINEL_X + 12, BOARD_Y + 190 + i * 20))
+                        (PAINEL_X + 12, BOARD_Y + 234 + i * 19))
 
         draw_center_text("<- -> mover    ^ girar    v descer    ESPAÇO hard drop",
                          small_font, (130, 130, 130), BOARD_Y + BOARD_PX_H + 18)
