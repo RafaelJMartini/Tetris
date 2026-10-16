@@ -252,6 +252,11 @@ winner_id = None
 match_reason = None
 game_over_sent = False
 conexao_perdida = False
+oponente_saiu = False
+rematch_pedido = False
+
+lixo_enviado = 0
+lixo_recebido = 0
 
 # A thread de rede só deposita aqui, quem mexe no jogo é o loop principal
 state_lock = threading.Lock()
@@ -278,7 +283,7 @@ big_font = pygame.font.SysFont(None, 48)
 # Thread para escutar o stream contínuo de dados do servidor TCP
 def receive_server_messages():
     global opponent_board, opponent_score, player_id
-    global pending_seed, match_over, winner_id, match_reason, conexao_perdida
+    global pending_seed, match_over, winner_id, match_reason, conexao_perdida, oponente_saiu
     buffer = ""
     while True:
         try:
@@ -312,6 +317,8 @@ def receive_server_messages():
                     winner_id = message.get("winner_id")
                     match_reason = message.get("reason")
                     match_over = True
+                elif msg_type == "OPPONENT_LEFT":
+                    oponente_saiu = True
         except Exception:
             break
     conexao_perdida = True
@@ -330,6 +337,8 @@ def send_to_server(data_dict):
         pass
 
 def send_garbage(lines):
+    global lixo_enviado
+    lixo_enviado += lines
     opp_id = 2 if player_id == 1 else 1
     send_to_server({
         "type": "GARBAGE",
@@ -383,6 +392,18 @@ while running:
     if seed is not None:
         tetris = TetrisGame(seed)
         game_started = True
+        # Zera tudo, vale tanto pra primeira partida quanto pra revanche
+        match_over = False
+        winner_id = None
+        match_reason = None
+        game_over_sent = False
+        rematch_pedido = False
+        lixo_enviado = lixo_recebido = 0
+        opponent_board = [[0 for _ in range(BOARD_WIDTH)] for _ in range(BOARD_HEIGHT)]
+        opponent_score = 0
+        ultimo_estado_enviado = None
+        with state_lock:
+            del pending_garbage[:]
         intervalo_queda = tetris.fall_interval()
         pygame.time.set_timer(FALL_EVENT, intervalo_queda)
 
@@ -419,6 +440,12 @@ while running:
             if garbage_sent > 0:
                 send_garbage(garbage_sent)
 
+        elif (event.type == pygame.KEYDOWN and event.key == pygame.K_r
+              and match_over and not rematch_pedido
+              and not oponente_saiu and not conexao_perdida):
+            rematch_pedido = True
+            send_to_server({"type": "REMATCH", "player_id": player_id})
+
     # Aplica o lixo recebido pela rede na thread principal
     if tetris is not None and not match_over:
         with state_lock:
@@ -427,6 +454,7 @@ while running:
         for lines, holes in incoming:
             if lines > 0:
                 tetris.add_garbage_lines(lines, holes)
+                lixo_recebido += lines
 
     # Avisa o servidor uma vez só, ele que decide o vencedor
     if tetris is not None and tetris.game_over and not game_over_sent:
@@ -471,12 +499,18 @@ while running:
         screen.blit(small_font.render(f"{tetris.total_lines} linhas", True, (150, 150, 150)),
                     (PAINEL_X + 20, BOARD_Y + 178))
 
+        screen.blit(small_font.render("LIXO", True, (255, 255, 255)), (PAINEL_X + 20, BOARD_Y + 212))
+        screen.blit(small_font.render(f"enviado:  {lixo_enviado}", True, (120, 220, 120)),
+                    (PAINEL_X + 12, BOARD_Y + 234))
+        screen.blit(small_font.render(f"recebido: {lixo_recebido}", True, (220, 120, 120)),
+                    (PAINEL_X + 12, BOARD_Y + 252))
+
         ataque = ["2 linhas", "3 linhas", "4 linhas"]
         envia = ["1 de lixo", "2 de lixo", "4 de lixo"]
-        screen.blit(small_font.render("ATAQUE", True, (255, 255, 255)), (PAINEL_X + 20, BOARD_Y + 212))
+        screen.blit(small_font.render("ATAQUE", True, (255, 255, 255)), (PAINEL_X + 20, BOARD_Y + 286))
         for i, (a, e) in enumerate(zip(ataque, envia)):
             screen.blit(small_font.render(f"{a} -> {e}", True, (150, 150, 150)),
-                        (PAINEL_X + 12, BOARD_Y + 234 + i * 19))
+                        (PAINEL_X + 12, BOARD_Y + 308 + i * 19))
 
         draw_center_text("<- -> mover    ^ girar    v descer    ESPAÇO hard drop",
                          small_font, (130, 130, 130), BOARD_Y + BOARD_PX_H + 18)
@@ -487,7 +521,7 @@ while running:
             screen.blit(overlay, (0, 0))
 
             venceu = winner_id == player_id
-            caixa_w, caixa_h = 420, 120
+            caixa_w, caixa_h = 420, 145
             caixa = (WIDTH // 2 - caixa_w // 2, HEIGHT // 2 - caixa_h // 2, caixa_w, caixa_h)
             pygame.draw.rect(screen, (18, 18, 18), caixa)
             pygame.draw.rect(screen, (0, 200, 0) if venceu else (200, 0, 0), caixa, 3)
@@ -499,6 +533,14 @@ while running:
             else:
                 detalhe = f"Score final: {tetris.score}  x  {opponent_score}"
             draw_center_text(detalhe, font, (200, 200, 200), caixa[1] + 72)
+
+            if oponente_saiu:
+                aviso, cor = "o oponente saiu do jogo", (255, 140, 140)
+            elif rematch_pedido:
+                aviso, cor = "aguardando o oponente aceitar...", (200, 200, 120)
+            else:
+                aviso, cor = "pressione R para jogar de novo", (160, 220, 255)
+            draw_center_text(aviso, small_font, cor, caixa[1] + 98)
         elif conexao_perdida:
             draw_center_text("Conexão com o servidor perdida.", font, (255, 80, 80), HEIGHT // 2)
         elif tetris.game_over:
